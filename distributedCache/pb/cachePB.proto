@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package pb;
+option go_package="./;pb";
+
+// Request 包含 2 个字段， group 和 cache，这与之前定义的接口 /_cache/<group>/<name> 所需的参数吻合
+message Request {
+  string group = 1;
+  string key = 2;
+}
+
+// Response 包含 1 个字段，bytes，类型为 byte 数组
+message Response {
+  bytes value = 1;
+}
+
+service GroupCache {
+  rpc Get(Request) returns (Response);
+}
