@@ -40,40 +40,50 @@ LFU 会淘汰缓存中访问评率最低的记录。LFU 认为某个数据在过
 
 首先定义键值对的结构。为了通用性，允许值是实现 Value 接口的任意类型，该接口只包含了一个方法 Len() int，用于返回值所占用的内存大小。
 
-    type node struct {
-        key   string
-        value Value
-    }
+```go
+type node struct {
+    key   string
+    value Value
+}
 
-    type Value interface {
-        Len() int
-    }
+type Value interface {
+    Len() int
+}
+```
 
 然后采用 LRU 策略实现 CacheLRU，采用 LRU 策略所以首先要有 双向链表和 map。其次要有两个值保存 cache 可使用的最大缓存空间和目前已用的空间。最后要有一个当某个记录被删除时调用的回调函数。
 
-    type CacheLRU struct {
-        maxBytes  int64                         // 允许使用的最大内存
-        nbytes    int64                         // 当前已使用的内存
-        ll        *list.List                    // 使用 Go 语言标准库实现的双向链表list.List
-        cacheMap  map[string]*list.Element      // 维护一个map， 键是字符串，值是双向链表中对应节点的指针
-        OnEvicted func(key string, value Value) // 某条记录被移除时的回调函数
-    }
+```go
+type CacheLRU struct {
+    maxBytes  int64                         // 允许使用的最大内存
+    nbytes    int64                         // 当前已使用的内存
+    ll        *list.List                    // 使用 Go 语言标准库实现的双向链表list.List
+    cacheMap  map[string]*list.Element      // 维护一个map， 键是字符串，值是双向链表中对应节点的指针
+    OnEvicted func(key string, value Value) // 某条记录被移除时的回调函数
+}
+```
 
 实例化一个对象的函数如果没有特殊点需要说明就不再单独说明了。接下来就是要实现查询、新增、删除缓存操作了。
 
 **_查询操作的实现_** ：分两步，第一步是根据传入的 key 找到对应的双向链表的节点值，也就是之前定义的 node 结构。第二步就是使用双向列表的方法: MoveToBack(elem) 把这个节点移动到双向链表的末尾，双向链表作为队列使用，队首和队尾是相对的，在这里规定 Back() 为队尾。
 
-    func (c *CacheLRU) Find(key string) (value Value, ok bool)
+```go
+func (c *CacheLRU) Find(key string) (value Value, ok bool)
+```
 
 **_删除操作的实现_** ：队首元素是我们要移除的元素。逻辑是首先通过 Front() 拿到队首元素 elem，然后用 Remove(elem) 从双向列表中删除这个元素。从链表中删除这个节点之后还需要从 map 中删除这个记录。利用 elem.Value 拿到节点的值并强制转化为 node 结构。然后使用 delete(map, key) 删除这条记录。最后更新内存使用情况，更新 cache 的 nbytes 字段值。
 
 cache 中有个回调函数，如果回调函数不是 nil 则调用回调函数，在这里可以做一些针删除的这个节点的一些额外工作。
 
-    func (c *CacheLRU) Remove() 
+```go
+func (c *CacheLRU) Remove() 
+```
 
 **_新增节点的实现_** ：将数据添加到缓存中。在添加的时候需要考虑记录是否已经存在和内存是否会超限。如果节点已经存在了，那就修改这个节点并将这个节点移动到双向链表的末尾。如果不存在则创建节点并添加到队尾，同时在 cacheMap 中记录映射关系。如果添加后超过了内存的最大值限制则调用 remove 来删除节点。一般 maxBytes 不会设置为内存的大小，会留有一定的冗余空间。
 
-    func (c *CacheLRU) Add(key string, value Value)
+```go
+func (c *CacheLRU) Add(key string, value Value)
+```
 
 最后实现一个获取缓存中已经存在的记录的数量的函数。ll.Len()
 
@@ -81,44 +91,48 @@ cache 中有个回调函数，如果回调函数不是 nil 则调用回调函数
 
 删除的逻辑是设置缓存的上限是前两个键值对的大小，然后添加前两个键值对，最后再添加一个键值对，看是否会将第一个键值对弹出。
 
-    func TestCache_Remove(t *testing.T) {
-        k1, k2, k3 := "key1", "key2", "k3"
-        v1, v2, v3 := "value1", "value2", "v3"
-        cap := len(k1 + k2 + v1 + v2)
-        //fmt.Printf("cap = %v\n", cap) // cap = 20
-        lru := New(int64(cap), nil)
-        lru.Add(k1, String(v1))
-        lru.Add(k2, String(v2))
-        lru.Add(k3, String(v3))
-        if _, ok := lru.Find("key1"); ok || lru.GetRecord() != 2 {
-            t.Fatalf("Removeoldest key1 failed")
-        }
-        fmt.Printf("")
+```go
+func TestCache_Remove(t *testing.T) {
+    k1, k2, k3 := "key1", "key2", "k3"
+    v1, v2, v3 := "value1", "value2", "v3"
+    cap := len(k1 + k2 + v1 + v2)
+    //fmt.Printf("cap = %v\n", cap) // cap = 20
+    lru := New(int64(cap), nil)
+    lru.Add(k1, String(v1))
+    lru.Add(k2, String(v2))
+    lru.Add(k3, String(v3))
+    if _, ok := lru.Find("key1"); ok || lru.GetRecord() != 2 {
+        t.Fatalf("Removeoldest key1 failed")
     }
+    fmt.Printf("")
+}
+```
 
 回调函数的单元测试如下，检查是否会将最先加入的两个删除。
 
-    func TestOnEvicted(t *testing.T) {
-        keys := make([]string, 0)
-        callback := func(key string, value Value) {
-            // 把移除的节点的值保存起来放在后面进行对比
-            keys = append(keys, key)
-        }
-        lru := New(int64(10), callback)
-        // 第一个键值对就将缓存沾满了。
-        lru.Add("key1", String("123456"))
-        // 弹出 key1
-        lru.Add("k2", String("k2"))
-        lru.Add("k3", String("k3"))
-        // 弹出 k2
-        lru.Add("k4", String("k4"))
-        // 检查是否弹出 key1 和 k2
-        expect := []string{"key1", "k2"}
-        
-        if !reflect.DeepEqual(expect, keys) {
-            t.Fatalf("Call OnEvicted failed, expect keys equals to %s", expect)
-        }
+```go
+func TestOnEvicted(t *testing.T) {
+    keys := make([]string, 0)
+    callback := func(key string, value Value) {
+        // 把移除的节点的值保存起来放在后面进行对比
+        keys = append(keys, key)
     }
+    lru := New(int64(10), callback)
+    // 第一个键值对就将缓存沾满了。
+    lru.Add("key1", String("123456"))
+    // 弹出 key1
+    lru.Add("k2", String("k2"))
+    lru.Add("k3", String("k3"))
+    // 弹出 k2
+    lru.Add("k4", String("k4"))
+    // 检查是否弹出 key1 和 k2
+    expect := []string{"key1", "k2"}
+    
+    if !reflect.DeepEqual(expect, keys) {
+        t.Fatalf("Call OnEvicted failed, expect keys equals to %s", expect)
+    }
+}
+```
 
 ## 二、单机并发安全缓存
 多个协程同时读写一个变量在并发度较高的情况下会发生冲突，确保一次只有一个协程可以访问该变量来避免冲突。
@@ -127,60 +141,76 @@ sync.Mutex 是 Go 语言标准库提供的一个互斥锁，当一个协程(goro
 
 首先定义一个 ByteView 结构来表示一个缓存的值，这个值是 []byte 类型的，会存储真实的缓存值，使用 byte 是为了能够保存任意类型的数据。既然作为缓存值，那么就要实现之前在 node 中定义的缓存键值对中 值的 value 接口的方法。方法的内容就是返回 b 的长度。
 
-    type ByteView struct {
-        b []byte // 存储真实的缓存值，选择 byte 类型是为了能够支持任意的数据类型的存储
-    }
+```go
+type ByteView struct {
+    b []byte // 存储真实的缓存值，选择 byte 类型是为了能够支持任意的数据类型的存储
+}
+```
 
 为了防止缓存被外部程序修改，这里提供一个能够获取 b 的拷贝副本的方法。使用 copy 来获取一个 b 的副本并返回。
 
-    func cloneBytes(b []byte) []byte {
-        c := make([]byte, len(b))
-        copy(c, b)
-        return c
-    }
+```go
+func cloneBytes(b []byte) []byte {
+    c := make([]byte, len(b))
+    copy(c, b)
+    return c
+}
 
-    // b 是只读的，使用 ByteSlice() 方法返回一个拷贝，防止缓存值被外部程序修改
-    func (v ByteView) ByteSlice() []byte {
-        return cloneBytes(v.b)
-    }
+// b 是只读的，使用 ByteSlice() 方法返回一个拷贝，防止缓存值被外部程序修改
+func (v ByteView) ByteSlice() []byte {
+    return cloneBytes(v.b)
+}
+```
 
 提供一个将 []byte 类型转化为字符串类型的方法，便于用户使用。
 
-    func (v ByteView) String() string {
-        return string(v.b)
-    }
+```go
+func (v ByteView) String() string {
+    return string(v.b)
+}
+```
 
 接下来在 cache.go 中定义一个 cache 结构，并实例化一个 使用 LRU 策略的缓存，这个 cache 是单机的缓存，后续会在分布式缓存中被复用。同时会在这里添加对于并发安全的支持。
 
-    type cache struct {
-        mu         sync.Mutex
-        lru        *lru.CacheLRU // 采用 LRU 策略
-        cacheBytes int64         // 最大的缓存空间
-    }
+```go
+type cache struct {
+    mu         sync.Mutex
+    lru        *lru.CacheLRU // 采用 LRU 策略
+    cacheBytes int64         // 最大的缓存空间
+}
+```
  给 cache 对象添加 新增缓存数据和查询缓存数据的方法。
 
 新增缓存数据其实就是对 LRU 的 ADD() 方法的封装，逻辑也很简单：如果 cache 的 lru 字段为空，那就创建一个使用 LRU 策略的缓存结构并调用 LRU 策略的 Add(key, value) 方法添加缓存数据。整个过程都是在 sync.Mutex 锁下完成的。
 
-    func (c *cache) add(key string, value ByteView)
+```go
+func (c *cache) add(key string, value ByteView)
+```
 
 查询缓存数据的方法是对 LRU 的 Find() 方法的封装，逻辑和新增缓存数据一样。
 
-    func (c *cache) find(key string) (value ByteView, ok bool)
+```go
+func (c *cache) find(key string) (value ByteView, ok bool)
+```
 
 接下来就是对核心的 Group 数据结构，也是分布式缓存系统的核心数据结构。Group 核心的数据结构，负责与用户的交互，并且控制缓存值存储和获取的流程。
 
-    type Group struct {
-        name      string    // 每个 Group 拥有一个唯一的名称 name
-        getter    Getter    // 缓存未命中时获取源数据的回调(callback)
-        mainCache cache     // 采用 LRU 实现的单机并发安全缓存
-    }
+```go
+type Group struct {
+    name      string    // 每个 Group 拥有一个唯一的名称 name
+    getter    Getter    // 缓存未命中时获取源数据的回调(callback)
+    mainCache cache     // 采用 LRU 实现的单机并发安全缓存
+}
+```
 
 为什么要用 Group 命名呢？因为一个 Group 是一个缓存命名空间和相关的数据加载分布，比如在创建缓存的时候指定 name 为 area 的缓存保存位置信息，name 为 money 的缓存保存价格信息等。在发起查询请求时会携带 Group name 的信息。后续的一些功能都会在 Group 上进行迭代。
 
 添加创建 Group 的功能和 获取指定 name 的 Group。创建 Group 需要加读写锁，获取指定 name 的 Group 只需要加读写即可。
 
-    func NewGroup(name string, cacheBytes int64, getter Getter) *Group
-    func GetGroup(name string) *Group
+```go
+func NewGroup(name string, cacheBytes int64, getter Getter) *Group
+func GetGroup(name string) *Group
+```
 
 设计 Get 方法从指定的 Group 中获取缓存。在获取之前先来梳理一下分布式缓存系统中查询一个缓存的简单流程。由于目前为止实现的是单机缓存，所以在这里要实现 (1) 和 (3) 的流程。
 
@@ -192,62 +222,76 @@ sync.Mutex 是 Go 语言标准库提供的一个互斥锁，当一个协程(goro
 
 定义一个 Getter 接口，要求实现 Get 函数从数据源获取数据。
 
-    type Getter interface {
-        Get(key string) ([]byte, error)
-    }
+```go
+type Getter interface {
+    Get(key string) ([]byte, error)
+}
+```
 
 定义一个函数类型 GetterFunc 这个函数类型
 
-    type GetterFunc func(key string) ([]byte, error)
+```go
+type GetterFunc func(key string) ([]byte, error)
+```
 
 接下来让这个函数实现这个接口的方法。
 
-    func (f GetterFunc) Get(key string) ([]byte, error) {
-        return f(key)
-    }
+```go
+func (f GetterFunc) Get(key string) ([]byte, error) {
+    return f(key)
+}
+```
 
 这里使用了一个接口型函数。函数类型实现某一个接口，称之为接口型函数，方便使用者在调用时既能够传入函数作为参数，也能够传入实现了该接口的结构体作为参数。这种方式适用于只有一个函数的接口。
 
 定义 getLocally 函数，用于使用回调函数从数据源获取数据并将数据添加到缓存 mainCache  中。对应 (3) 的路径。
 
-    func (g *Group) getLocally(key string) (ByteView, error) {
-        bytes, err := g.getter.Get(key)
-        if err != nil {
-            return ByteView{}, err
-        }
-        value := ByteView{b: cloneBytes(bytes)}
-        // 通过 populateCache 方法将源数据添加到缓存 mainCache 中
-        g.populateCache(key, value)
-        return value, nil
+```go
+func (g *Group) getLocally(key string) (ByteView, error) {
+    bytes, err := g.getter.Get(key)
+    if err != nil {
+        return ByteView{}, err
     }
+    value := ByteView{b: cloneBytes(bytes)}
+    // 通过 populateCache 方法将源数据添加到缓存 mainCache 中
+    g.populateCache(key, value)
+    return value, nil
+}
+```
 
 这里为路径 (2) 预留一个方法 load。在这个方法实现的功能是从其他节点获取数据和从本地获取数据。目前这里只实现从本地获取数据，也就是调用 getLocally() 方法。
 
-    func (g *Group) load(key string) (value ByteView, err error)
+```go
+func (g *Group) load(key string) (value ByteView, err error)
+```
 
 接下来就是实现核心的 Get 方法了。Get 的逻辑很简单，就是通过 key 从缓存中获取数据并返回。如果该缓存不存在，则调用 load() 方法从远程或者本地获取数据。目前还没有实现到分布式节点，所以 load () 方法中只有从本地获取数据的功能。
 
-    func (g *Group) Get(key string) (ByteView, error) {
-        // 如果 key 是空的
-        if key == "" {
-            return ByteView{}, fmt.Errorf("key is required")
-        }
-        // 如果查找到了,返回缓存
-        if v, ok := g.mainCache.find(key); ok {
-            log.Println("[Cache] hit")
-            return v, nil
-        }
-        // 没查找到，调用load方法
-        return g.load(key)
+```go
+func (g *Group) Get(key string) (ByteView, error) {
+    // 如果 key 是空的
+    if key == "" {
+        return ByteView{}, fmt.Errorf("key is required")
     }
+    // 如果查找到了,返回缓存
+    if v, ok := g.mainCache.find(key); ok {
+        log.Println("[Cache] hit")
+        return v, nil
+    }
+    // 没查找到，调用load方法
+    return g.load(key)
+}
+```
 
 进行测试：首先使用一个 map 来模拟一个耗时的数据库。
 
-    var db = map[string]string{
-        "Tom":  "630",
-        "Jack": "589",
-        "Sam":  "567",
-    }
+```go
+var db = map[string]string{
+    "Tom":  "630",
+    "Jack": "589",
+    "Sam":  "567",
+}
+```
 
 测试代码测试两种情况：
 
@@ -257,18 +301,20 @@ sync.Mutex 是 Go 语言标准库提供的一个互斥锁，当一个协程(goro
 
 创建缓存时的回调函数如下：
 
-	gee := NewGroup("scores", 2<<10, GetterFunc(
-        func(key string) ([]byte, error) {
-            log.Println("[cache not saved, get from source] search key", key)
-            if v, ok := db[key]; ok {
-                if _, ok := loadCounts[key]; !ok {
-                    loadCounts[key] = 0
-                }
-                loadCounts[key] += 1
-                return []byte(v), nil
+```go
+gee := NewGroup("scores", 2<<10, GetterFunc(
+    func(key string) ([]byte, error) {
+        log.Println("[cache not saved, get from source] search key", key)
+        if v, ok := db[key]; ok {
+            if _, ok := loadCounts[key]; !ok {
+                loadCounts[key] = 0
             }
-        return nil, fmt.Errorf("%s not exist", key)
-    }))
+            loadCounts[key] += 1
+            return []byte(v), nil
+        }
+    return nil, fmt.Errorf("%s not exist", key)
+}))
+```
 
 
 目前已经实现了单机并发缓存。下一步就是要实现分布式并发缓存了，也就是多个物理机作为缓存的节点设备共同完成缓存服务。
@@ -278,45 +324,61 @@ sync.Mutex 是 Go 语言标准库提供的一个互斥锁，当一个协程(goro
 
 首先要实现一个数据结构来承载节点之间通信的信息，包括服务端的信息和客户端的信息。先实现服务端。
 
-    type HTTPPool struct {
-        self        string                 // 保存自己的地址
-        basePath    string                 // 通讯地址的前缀，默认是 /_cache/
-    }
+```go
+type HTTPPool struct {
+    self        string                 // 保存自己的地址
+    basePath    string                 // 通讯地址的前缀，默认是 /_cache/
+}
+```
 
 首先要对 HTTPPool 初始化，需要传入一个地址作为服务端提供服务的地址，包括 IP 和 端口。作为一个承载节点间通信的对象，必须要实现 ServeHTTP 才能作为 ListenAndServe 的 handler 传入。所以 ServeHTTP 的实现逻辑是关键的部分。后续随着更多功能的添加，ServeHTTP 还会进行迭代。
 
 ServeHTTP 目前的逻辑是比较简单的。我们约定请求的格式为 
     
-    /<basepath>/<groupname>/<key>
+```go
+/<basepath>/<groupname>/<key>
+```
 
 ServeHTTP 方法：
 
-    func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, req *http.Request)
+```go
+func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, req *http.Request)
+```
 
 首先判断请求的前缀是不是预期的前缀 basePath，如果不是的话就报一个 panic。
 
-    // 如果请求不是以 默认前缀开始的则报错
-    if !strings.HasPrefix(req.URL.Path, p.basePath) {
-        panic("HTTPPool serving unexpected path: " + req.URL.Path)
-    }
+```go
+// 如果请求不是以 默认前缀开始的则报错
+if !strings.HasPrefix(req.URL.Path, p.basePath) {
+    panic("HTTPPool serving unexpected path: " + req.URL.Path)
+}
+```
 
 然后把这个请求中 basePath 后面的部分按照 / 进行切分，切分后 parts[0] = groupname, parts[1] = key。如果 parts 不是两个字段说明请求的 URL 有问题。返回一个 http.Error。
     
-    // /<basepath>/<groupname>/<key> 得到的是 groupname 和 key，也就是parts
-    parts := strings.SplitN(req.URL.Path[len(p.basePath):], "/", 2)
+```go
+// /<basepath>/<groupname>/<key> 得到的是 groupname 和 key，也就是parts
+parts := strings.SplitN(req.URL.Path[len(p.basePath):], "/", 2)
+```
 
 接下来通过 GetGroup(groupname) 方法拿到 group 实例，也就是拿到对应的缓存。
 
-    group := GetGroup(groupName)
+```go
+group := GetGroup(groupName)
+```
 
 拿到指定 name 的缓存后就要通过 key 值来查询缓存了。拿到的 view 是 ByteView 对象，也就是 []byte 类型的数据。
 
-    view, err := group.Get(key)
+```go
+view, err := group.Get(key)
+```
 
 最后将缓存值作为 httpResponse 的 body 返回写入到响应中。这里写入的是一个 view 的副本，ByteSlice() 返回的是 []byte 类型。
 
-    w.Header().Set("Content-Type", "application/octet-stream")
-    w.Write(view.ByteSlice())
+```go
+w.Header().Set("Content-Type", "application/octet-stream")
+w.Write(view.ByteSlice())
+```
 
 到此节点就能够被其他的节点访问了。现在来测试一下服务端的能否正常使用。 使用 map 模拟了数据源 db。 创建一个名为 scores 的缓存 Group ，若缓存为空，回调函数会从 db 中获取数据并返回。使用 http.ListenAndServe 在 9999 端口启动 HTTP 服务。
 
@@ -346,39 +408,53 @@ ServeHTTP 方法：
 
 首先定义了函数类型 Hash，采取依赖注入的方式，允许用于替换成自定义的 Hash 函数，也方便测试时替换，默认为 crc32.ChecksumIEEE 算法。
 
-    type Hash func(data []byte) uint32
+```go
+type Hash func(data []byte) uint32
+```
 
 定义一个 Map 结构作为一致性哈希算法的主要结构。
 
-    type Map struct {
-        hash     Hash           // Hash 函数
-        replicas int            // 虚拟节点倍数
-        keys     []int          // 哈希环
-        hashMap  map[int]string // 虚拟节点和真实节点的映射表，key 虚拟节点哈希值，value 是真是节点名称
-    }
+```go
+type Map struct {
+    hash     Hash           // Hash 函数
+    replicas int            // 虚拟节点倍数
+    keys     []int          // 哈希环
+    hashMap  map[int]string // 虚拟节点和真实节点的映射表，key 虚拟节点哈希值，value 是真是节点名称
+}
+```
 构造函数要求传入 虚拟节点的数 和 哈希函数，如果 hash 为 nil 则使用默认的哈希函数。
 
-    func New(replicas int, fn Hash) *Map
+```go
+func New(replicas int, fn Hash) *Map
+```
 
 提供添加节点的方法。这里添加的节点是真实节点的虚拟节点。可以传入多个真实机器的地址，然后遍历每一个地址，对每一个地址循环创建 replicas 个虚拟节点并添加到 hash 环中，环中保存的是 每一个虚拟节点的 hash 值。然后将虚拟节点和真实节点的映射关系保存在 hashMap 中。 其中 key 是虚拟节点的 hash 值，value 是真实机器的地址。最后对环上的 hash 值排序。
     
-    func (m *Map) Add(addrs ...string)
+```go
+func (m *Map) Add(addrs ...string)
+```
 
 提供节点的获取方法。计算要查询的 key 的 hash 值，前面提到 key 会被映射到 2^32 的空间中。然后用这个 hash 值去环中顺时针寻找第一个大于该 hash 值的节点的下标，通过下标在环中拿到这个虚拟节点的 hash 值。最后通过这个 hash 值去保存虚拟节点和真实节点映射关系的 hashMap 中找到真实机器的地址。注意 环 在 Map 中值得就是 keys []int 这一成员变量。
 
-    func (m *Map) Get(key string) string
+```go
+func (m *Map) Get(key string) string
+```
 
 对哈希一致性算法进行测试。
 
-    func TestHashing(t *testing.T)
+```go
+func TestHashing(t *testing.T)
+```
 
 测试的过程中我们不能使用正常的 hash 算法，因为我们需要知道 key 预期的 hash 值，才能判断添加和查询是否符合预期。所以在创建 hash 的时候要自己实现一个 hash 算法，就是简单的把数字转化为字符串。
 
-	// 构造函数，使用自定义的哈希函数
-	hash := New(3, func(key []byte) uint32 {
-        i, _ := strconv.Atoi(string(key))
-        return uint32(i)
-	})
+```go
+// 构造函数，使用自定义的哈希函数
+hash := New(3, func(key []byte) uint32 {
+    i, _ := strconv.Atoi(string(key))
+    return uint32(i)
+})
+```
 
 然后场景是初始节点有三个，每个节点都有三个虚拟的节点。真实节点和虚拟节点如下图左边所示。三个真实节点的地址分别是 2、4、6。每个虚拟节点按照顺序编码，计算 hash 值后放在 hash 环上的结构如下图所示。这个环代表的就是 Map 结构中的 keys []int
 
@@ -395,53 +471,65 @@ ServeHTTP 方法：
 
 在需要用到客户端向远程访问的场景中，客户端要能够通过 key 来选择应该向哪一个节点发起请求。所以首先抽象出一个用于节点选择的接口 PeerPicker ，这个接口内定义了一个选择节点的方法 PickPeer。
 
-    type PeerPicker interface {
-        PickPeer(key string) (peer PeerGetter, ok bool)
-    }
+```go
+type PeerPicker interface {
+    PickPeer(key string) (peer PeerGetter, ok bool)
+}
+```
 PickPeer 方法的入参是要查询的 key 值，返回值是一个 PeerGetter 接口，这个接口定义了一个 Get 方法，这个方法是用于从对应 group 查找缓存值。PeerGetter 接口对应于 HTTP 客户端。使用方式是需要定义一个结构用于承载客户端的信息并实现这个接口的 Get 方法。
 
-    type PeerGetter interface {
-        Get(group string, key string) error
-    }
+```go
+type PeerGetter interface {
+    Get(group string, key string) error
+}
+```
 
 接下来在存放网络相关代码的 http.go 中创建客户端实例，并实现 PeerGetter 接口的 Get 方法。
 
-    type httpClients struct {
-        baseUrl string // 表示将要访问的远程节点的地址
-    }
+```go
+type httpClients struct {
+    baseUrl string // 表示将要访问的远程节点的地址
+}
+```
 
 Get() 方法的逻辑也很简单，首先拼接参数，得到一个完整的 URL ,按照之前约定的URL格式，一个 url 后缀是 baseUrl + groupName + key。然后调用 http.Get(url) 向服务端发起一次 Get 请求，获取返回值并转化为 []byte 类型。
 
 实现完 PeerGetter 接口之后就要给承载节点间通信信息的 HTTPPool 添加节点的选择功能了。
 
-    type HTTPPool struct {
-        self        string                 // 保存自己的地址
-        basePath    string                 // 通讯地址的前缀，默认是 /_cache/
-        mu          sync.Mutex             // 保证节点选择时的并发安全
-        peers       *consistentHash.Map    // 类型是一致性哈希算法的 Map，用来根据具体的 key 选择节点
-        httpClients map[string]*httpClient // 映射远程节点与对应的 httpGetter, 每一个远程节点对应一个 httpGetter，因为 httpGetter 与远程节点的地址 baseURL 有关
-    }
+```go
+type HTTPPool struct {
+    self        string                 // 保存自己的地址
+    basePath    string                 // 通讯地址的前缀，默认是 /_cache/
+    mu          sync.Mutex             // 保证节点选择时的并发安全
+    peers       *consistentHash.Map    // 类型是一致性哈希算法的 Map，用来根据具体的 key 选择节点
+    httpClients map[string]*httpClient // 映射远程节点与对应的 httpGetter, 每一个远程节点对应一个 httpGetter，因为 httpGetter 与远程节点的地址 baseURL 有关
+}
+```
 
 接下来要给 HTTPPool 实现 PeerPicker 接口，也就是实现接口内的 PickPeer 方法。PickPeer 方法的逻辑本质上是对 哈希一致性算法 中的 Get() 方法的封装。哈希一致性算法 中的 Get() 方法通过 key 拿到应该访问的节点地址，然后通过这个节点地址在 httpClients 这个 map 中拿到包含发起请求功能的实例，这个实例中实现了 Get() 方法，获取远程节点的数据。
 
-    func (p *HTTPPool) PickPeer(key string) (PeerGetter, bool)
+```go
+func (p *HTTPPool) PickPeer(key string) (PeerGetter, bool)
+```
 
 在获取之前要将节点根据哈希一致性算法添加到系统中，同时将能够从对应节点获取数据的客户端保存到 map 中。所以要实现一个 set() 方法，将哈希一致性算法的添加节点 Add() 方法封装起来。
 
-    func (p *HTTPPool) Set(addrs ...string) {
-        p.mu.Lock()
-        defer p.mu.Unlock()
-        // 实例化一个一致性哈希算法并采用默认的哈希函数
-        p.peers = consistentHash.New(defaultReplicas, nil)
-        // 添加节点，也就是真实的计算机节点
-        p.peers.Add(addrs...)
-        // 为每一个节点创建一个客户端并保存在 map 中
-        p.httpClients = make(map[string]*httpClient, len(addrs))
-        for _, addr := range addrs {
-            // http://localhost:8001/_cache/
-            p.httpClients[addr] = &httpClient{baseUrl: addr + p.basePath}
-        }
+```go
+func (p *HTTPPool) Set(addrs ...string) {
+    p.mu.Lock()
+    defer p.mu.Unlock()
+    // 实例化一个一致性哈希算法并采用默认的哈希函数
+    p.peers = consistentHash.New(defaultReplicas, nil)
+    // 添加节点，也就是真实的计算机节点
+    p.peers.Add(addrs...)
+    // 为每一个节点创建一个客户端并保存在 map 中
+    p.httpClients = make(map[string]*httpClient, len(addrs))
+    for _, addr := range addrs {
+        // http://localhost:8001/_cache/
+        p.httpClients[addr] = &httpClient{baseUrl: addr + p.basePath}
     }
+}
+```
 
 创建一个 一致性哈希 的实例并添加节点，然后保存节点和对应客户端的映射关系。 这个客户端保存了要请求的节点的 url 信息，并且实现了 接口的 Get() 方法，这个方法的逻辑在前面有提到过就是为了获取数据。
 
@@ -451,74 +539,92 @@ _**截止到现在 HTTPPool 已经有作为 服务端返回数据的能力，也
 
 load 方法的逻辑是首先通过 key，使用 分布式缓存的 PickPeer(key) 方法，返回值是一个实现了 PeerGetter 接口的客户端实例，然后将这个客户端实例和 key 一起传入给 getFromPeer() 方法。如果获取失败就从本地数据源获取数据。
 
-    if peer, ok := g.peers.PickPeer(key); ok {
-        // 要从远程节点获取对应的 key 的缓存值， peer 是通过 key 查询到的远程节点的 URL
-        if value, err := g.getFromPeer(peer, key); err == nil {
-            return value, nil
-        }
-        // 若是本机节点或失败，则回退到 getLocally()
-        log.Println("[Cache] Failed to get from peer", err)
+```go
+if peer, ok := g.peers.PickPeer(key); ok {
+    // 要从远程节点获取对应的 key 的缓存值， peer 是通过 key 查询到的远程节点的 URL
+    if value, err := g.getFromPeer(peer, key); err == nil {
+        return value, nil
     }
+    // 若是本机节点或失败，则回退到 getLocally()
+    log.Println("[Cache] Failed to get from peer", err)
+}
+```
 下面来看下 getFromPeer 方法的逻辑。接收到传入的客户端实例和 key，客户端实例调用实现的接口的 Get() 方法去获得数据。为什么这个方法要用接口让用户自己实现呢？
 
-    func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error)
+```go
+func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error)
 
-    bytes, err := peer.Get(g.name, key)
+bytes, err := peer.Get(g.name, key)
+```
 
 ### 3、实现节点注册
 最后要将实现了 PeerPicker 接口的 HTTPPool 注入到 Group 中。在 Group 中新增 PeerPicker 类型的成员变量 peers。并添加一个 RegisterPeers 方法注册节点。每一个节点都对应一个属于自己的 HTTPPool，也可以说代表这一个节点，这个 HTTPPool 实现了 PeerPicker 接口，所以可以作为 PeerPicker 类型的参数传递。
 
-    func (g *Group) RegisterPeers(peers PeerPicker) {
-        if g.peers != nil {
-            panic("RegisterPeerPicker called more than once")
-        }
-        g.peers = peers
+```go
+func (g *Group) RegisterPeers(peers PeerPicker) {
+    if g.peers != nil {
+        panic("RegisterPeerPicker called more than once")
     }
+    g.peers = peers
+}
+```
 
 ### 4、进行测试
 编写一个 main 函数，并设计如下几个方法。
 
 startCacheServer 用来启动缓存服务器：创建 HTTPPool，添加节点信息，注册到 gee 中，启动 HTTP 服务（共3个端口，8001/8002/8003），用户不感知。在这里首先创建 HTTPPool 并注册所有的计算机节点。之后将 HTTPPool 注册到 Group 中，最后 ListenAndServe 启动监听。
 
-    func startCacheServer(addr string, addrs []string, cache *distributedCache.Group)
+```go
+func startCacheServer(addr string, addrs []string, cache *distributedCache.Group)
+```
 
 startAPIServer 用来启动一个 API 服务（端口 9999），与用户进行交互，用户感知。用户通过这个地址来查询 key 缓存。将一个 handlerFunc 绑定到 /api，handlerFunc 的逻辑是解析 URL 得到 key，然后通过 cacheGroup 对象的 Get(key) 方法获取缓存值，并写入到响应中。最后调用 ListenAndServe。
 
-    func startAPIServer(apiAddr string, cache *distributedCache.Group)
+```go
+func startAPIServer(apiAddr string, cache *distributedCache.Group)
+```
 
 createGroup 用来创建一个缓存，回调方法是当缓存不存在时从本地数据源获取数据。
 
-    func createGroup() *distributedCache.Group
+```go
+func createGroup() *distributedCache.Group
 
-    var db = map[string]string{
-        "Tom":  "666",
-        "Jack": "777",
-        "Sam":  "888",
-    }
+var db = map[string]string{
+    "Tom":  "666",
+    "Jack": "777",
+    "Sam":  "888",
+}
+```
 
 最后是 main 函数需要命令行传入 port 和 api 2 个参数，用来在指定端口启动 HTTP 服务。
     
 用户访问这个接口来实现对缓存的查询。
 
-    // http://localhost:9999/api?key=Tom"
-    apiAddr := "http://localhost:9999"
+```go
+// http://localhost:9999/api?key=Tom"
+apiAddr := "http://localhost:9999"
+```
 
 定义要启动缓存服务的服务器地址和端口的映射，并将所有的地址保存到字符串切片 addrs 中
 
-    addrMap := map[int]string{
-        8001: "http://localhost:8001",
-        8002: "http://localhost:8002",
-        8003: "http://localhost:8003",
-    }
+```go
+addrMap := map[int]string{
+    8001: "http://localhost:8001",
+    8002: "http://localhost:8002",
+    8003: "http://localhost:8003",
+}
+```
 
 接下来就是调用这些方法并进行测试。
 
-    cache := createGroup()
-    if api {
-        go startAPIServer(apiAddr, cache)
-    }
-    time.Sleep(time.Second)
-    startCacheServer(addrMap[port], []string(addrs), cache)
+```go
+cache := createGroup()
+if api {
+    go startAPIServer(apiAddr, cache)
+}
+time.Sleep(time.Second)
+startCacheServer(addrMap[port], []string(addrs), cache)
+```
 
 测试用例：多个请求同时查询 key = Tom 的缓存值。可以发现第一次请求时因为还没有缓存，会从数据源家在数据。
 
@@ -551,60 +657,66 @@ createGroup 用来创建一个缓存，回调方法是当缓存不存在时从�
 
 实现一个 singleFlight 包，创建一个 核心数据结构 SingleFlight，包含一个sync.Mutex 锁来保证 map 的并发读写安全。
 
-    type SingleFlight struct {
-        mu sync.Mutex // 保护 m 并发安全
-        m  map[string]*call
-    }
+```go
+type SingleFlight struct {
+    mu sync.Mutex // 保护 m 并发安全
+    m  map[string]*call
+}
+```
 
 其中 call 是一个承载正在进行或者已经结束的请求的信息的对象。
 
-    type call struct {
-        // 并发协程之间如不需要消息传递，非常适合 sync.WaitGroup
-        // 本质是一个内部计数器，在执行goroutine行为之前执行 wg.Add(1)，给计数器+1，
-        // 执行完之后，执行wg.Done()，表示这个goroutine执行完成，计数器内部-1，
-        // wg.Wait()会阻塞代码的运行，等待所有的添加进WaitGroup的goroutine全部执行完毕(计数器减为0)，再退出程序
-        wg  sync.WaitGroup // 使用 sync.WaitGroup 锁避免重入
-        val interface{}    // 保存任意值
-        err error
-    }
+```go
+type call struct {
+    // 并发协程之间如不需要消息传递，非常适合 sync.WaitGroup
+    // 本质是一个内部计数器，在执行goroutine行为之前执行 wg.Add(1)，给计数器+1，
+    // 执行完之后，执行wg.Done()，表示这个goroutine执行完成，计数器内部-1，
+    // wg.Wait()会阻塞代码的运行，等待所有的添加进WaitGroup的goroutine全部执行完毕(计数器减为0)，再退出程序
+    wg  sync.WaitGroup // 使用 sync.WaitGroup 锁避免重入
+    val interface{}    // 保存任意值
+    err error
+}
+```
 
 然后实现一个 Do 方法接收 2 个参数，第一个参数是 key，第二个参数是一个函数 fn，也就是加载数据。Do 的作用就是，针对相同的 key，无论 Do 被调用多少次，函数 fn 都只会被调用一次，等待 fn 调用结束了，返回返回值或错误。其中这个 fn 代表的是获取数据的方法，这段逻辑在 load 方法中。也就是说我们实现完 Do 方法后只需要用 Do 方法将 load 里面的逻辑包裹起来即可。
 
-    func (sf *SingleFlight) Do(key string, fn func() (interface{}, error)) (interface{}, error) {
-        // g.mu 是保护 Group 的成员变量 m 不被并发读写而加上的锁
-        sf.mu.Lock()
-        // 还没有 key 和 call 的 map, 延迟初始化
-        if sf.m == nil {
-            sf.m = make(map[string]*call)
-        }
-        // 注意 sync.WaitGroup 和 sync.Mutex 的区别
-        // 如果当前的 key 已经存在于 map 中，说明已经有相同的 key 的请求，此时等待请求结束，返回请求的结果，不必再次发起请求
-        if c, ok := sf.m[key]; ok {
-            sf.mu.Unlock()
-            // 如果请求正在进行中，则等待
-            c.wg.Wait()
-            // 请求结束，返回结果
-            return c.val, c.err
-        }
-        // 如果当前的 key 不存在 map 中，说明还没有相同的 key 的请求，需要发起
-        c := new(call)
-        // 发起请求前加锁
-        c.wg.Add(1)
-        // 添加到 g.m，表明 key 已经有对应的请求在处理
-        sf.m[key] = c
+```go
+func (sf *SingleFlight) Do(key string, fn func() (interface{}, error)) (interface{}, error) {
+    // g.mu 是保护 Group 的成员变量 m 不被并发读写而加上的锁
+    sf.mu.Lock()
+    // 还没有 key 和 call 的 map, 延迟初始化
+    if sf.m == nil {
+        sf.m = make(map[string]*call)
+    }
+    // 注意 sync.WaitGroup 和 sync.Mutex 的区别
+    // 如果当前的 key 已经存在于 map 中，说明已经有相同的 key 的请求，此时等待请求结束，返回请求的结果，不必再次发起请求
+    if c, ok := sf.m[key]; ok {
         sf.mu.Unlock()
-        // 调用 fn，发起请求
-        c.val, c.err = fn()
-        // 请求结束
-        c.wg.Done()
-    
-        // 更新 g.m
-        sf.mu.Lock()
-        delete(sf.m, key)
-        sf.mu.Unlock()
-        // 返回结果
+        // 如果请求正在进行中，则等待
+        c.wg.Wait()
+        // 请求结束，返回结果
         return c.val, c.err
     }
+    // 如果当前的 key 不存在 map 中，说明还没有相同的 key 的请求，需要发起
+    c := new(call)
+    // 发起请求前加锁
+    c.wg.Add(1)
+    // 添加到 g.m，表明 key 已经有对应的请求在处理
+    sf.m[key] = c
+    sf.mu.Unlock()
+    // 调用 fn，发起请求
+    c.val, c.err = fn()
+    // 请求结束
+    c.wg.Done()
+
+    // 更新 g.m
+    sf.mu.Lock()
+    delete(sf.m, key)
+    sf.mu.Unlock()
+    // 返回结果
+    return c.val, c.err
+}
+```
 
 Do 方法看起来比较复杂，是因为有很多对 map 的加锁的操作。如果将逻辑梳理一下剥离出来会发现逻辑比较清晰。
 
@@ -617,29 +729,31 @@ Do 方法看起来比较复杂，是因为有很多对 map 的加锁的操作。
 完成 Do 方法之后，将 Do 方法包裹 load 方法中原有的逻辑即可。
 在 Group 中添加一个支持 singleFlight 的变量 loader。创建 Group 的时候要给这个 loader 赋值。load 修改后完整的逻辑如下：
 
-    func (g *Group) load(key string) (value ByteView, err error) {
-        // 使用 g.loader.Do 包裹请求保证相同的 key 只请求一次
-        signalFetch, err := g.loader.Do(key, func() (interface{}, error) {
-            // 之前不能保证相同的 key 只 fetch 一次
-            if g.peers != nil {
-                // 使用 PickPeer() 方法选择节点，如果是非本机节点，则进入以下流程，调用 getFromPeer() 从远程获取
-                if peer, ok := g.peers.PickPeer(key); ok {
-                // 要从远程节点获取对应的 key 的缓存值， peer 是通过 key 查询到的远程节点的 URL
-                    if value, err := g.getFromPeer(peer, key); err == nil {
-                        //log.Printf("[Cache] request key is from [%s]\n", peer)
-                        return value, nil
-                    }
-                    // 若是本机节点或失败，则回退到 getLocally()
-                    log.Println("[Cache] Failed to get from peer", err)
+```go
+func (g *Group) load(key string) (value ByteView, err error) {
+    // 使用 g.loader.Do 包裹请求保证相同的 key 只请求一次
+    signalFetch, err := g.loader.Do(key, func() (interface{}, error) {
+        // 之前不能保证相同的 key 只 fetch 一次
+        if g.peers != nil {
+            // 使用 PickPeer() 方法选择节点，如果是非本机节点，则进入以下流程，调用 getFromPeer() 从远程获取
+            if peer, ok := g.peers.PickPeer(key); ok {
+            // 要从远程节点获取对应的 key 的缓存值， peer 是通过 key 查询到的远程节点的 URL
+                if value, err := g.getFromPeer(peer, key); err == nil {
+                    //log.Printf("[Cache] request key is from [%s]\n", peer)
+                    return value, nil
                 }
+                // 若是本机节点或失败，则回退到 getLocally()
+                log.Println("[Cache] Failed to get from peer", err)
             }
-            return g.getLocally(key)
-        })
-        if err == nil {
-            return signalFetch.(ByteView), nil
         }
-        return
+        return g.getLocally(key)
+    })
+    if err == nil {
+        return signalFetch.(ByteView), nil
     }
+    return
+}
+```
 
 可以看到原有的逻辑作为 Do 方法中的 fn 函数了。完成这个功能之后在进行测试就会发现相同的 key 只会发起一次请求，其余的请求都会等待请求处理的结果。
 
@@ -654,53 +768,63 @@ protobuf 广泛地应用于远程过程调用(RPC) 的二进制传输，使用 p
 
 首先编写 .proto 文件，在文件中定义 Request 结构和 Response 结构。
 
-    // Request 包含 2 个字段， group 和 cache，这与之前定义的接口 /_cache/<group>/<name> 所需的参数吻合
-    message Request {
-        string group = 1;
-        string key = 2;
-    }
+```go
+// Request 包含 2 个字段， group 和 cache，这与之前定义的接口 /_cache/<group>/<name> 所需的参数吻合
+message Request {
+    string group = 1;
+    string key = 2;
+}
 
-    message Response {
-        bytes value = 1;
-    }
+message Response {
+    bytes value = 1;
+}
+```
 定义一个 rpc 服务名为 GroupCache，提供 Get() 接口进行通讯
 
-    service GroupCache {
-        rpc Get(Request) returns (Response);
-    }
+```go
+service GroupCache {
+    rpc Get(Request) returns (Response);
+}
+```
 
 然后使用 proto 编译产生 .pb.go 文件，这个文件中就有我们定义好的结构体。
 最后修改使用了 PeerGetter 接口的地方，将 req 和 res 换成 .pb.go 中生成的结构。
 
 修改 group 的 getFromPeer 方法，使用 proto 通信，利用 req 和 res。
 
-    func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
-        // 使用 protoc 通信
-        req := &pb.Request{
-            // name 是缓存的名字，key 是这个缓存中这个 key 的值
-            Group: g.name,
-            Key:   key,
-        }
-        res := &pb.Response{}
-        err := peer.Get(req, res)
-        if err != nil {
-            return ByteView{}, err
-        }
-        return ByteView{b: res.Value}, err
+```go
+func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
+    // 使用 protoc 通信
+    req := &pb.Request{
+        // name 是缓存的名字，key 是这个缓存中这个 key 的值
+        Group: g.name,
+        Key:   key,
     }
+    res := &pb.Response{}
+    err := peer.Get(req, res)
+    if err != nil {
+        return ByteView{}, err
+    }
+    return ByteView{b: res.Value}, err
+}
+```
 
 修改 ServeHTTP 方法，使用 proto.Marshal() 编码 HTTP 响应。
 
-    // 把结果以 proto 的格式写入到响应体中
-    body, err := proto.Marshal(&pb.Response{Value: view.ByteSlice()})
+```go
+// 把结果以 proto 的格式写入到响应体中
+body, err := proto.Marshal(&pb.Response{Value: view.ByteSlice()})
+```
 
 修改 客户端实现 PeerGetter 接口的 Get()方法。修改了 Get() 方法的参数，并且用这个参数拼接 URL。最后使用 proto.Unmarshal() 解码 HTTP 响应。
 
-    func (h *httpClient) Get(in *pb.Request, out *pb.Response) error
+```go
+func (h *httpClient) Get(in *pb.Request, out *pb.Response) error
 
-    u := fmt.Sprintf("%v%v/%v", h.baseUrl, url.QueryEscape(in.Group), url.QueryEscape(in.Key))
+u := fmt.Sprintf("%v%v/%v", h.baseUrl, url.QueryEscape(in.Group), url.QueryEscape(in.Key))
 
-    proto.Unmarshal(bytes, out)
+proto.Unmarshal(bytes, out)
+```
 
 
 # 难点
@@ -709,24 +833,32 @@ protobuf 广泛地应用于远程过程调用(RPC) 的二进制传输，使用 p
 
 定义一个 Getter 接口，要求实现 Get 函数从数据源获取数据。
 
-    type Getter interface {
-        Get(key string) ([]byte, error)
-    }
+```go
+type Getter interface {
+    Get(key string) ([]byte, error)
+}
+```
 
 定义一个函数类型 GetterFunc 这个函数类型
 
-    type GetterFunc func(key string) ([]byte, error)
+```go
+type GetterFunc func(key string) ([]byte, error)
+```
 
 接下来让这个函数实现这个接口的方法并调用自己，就实现了这个接口。
 
-    func (f GetterFunc) Get(key string) ([]byte, error) {
-        return f(key)
-    }
+```go
+func (f GetterFunc) Get(key string) ([]byte, error) {
+    return f(key)
+}
+```
 
 按照正常使用逻辑，应该是定义一个新的 结构体 A，然后给结构体 A 实现 接口的 Get 方法
 
-    type A struct{}
+```go
+type A struct{}
 
-    func (a *A) Get(key string) ([]byte, error) {
-        return nil, nil
-    }
+func (a *A) Get(key string) ([]byte, error) {
+    return nil, nil
+}
+```
